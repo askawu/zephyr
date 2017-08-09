@@ -143,11 +143,12 @@ static void zsock_received_cb(struct net_context *ctx, struct net_pkt *pkt,
 	/* Normal packet */
 	net_pkt_set_eof(pkt, false);
 
-	/* We don't care about packet header, so get rid of it asap */
-	header_len = net_pkt_appdata(pkt) - pkt->frags->data;
-	net_buf_pull(pkt->frags, header_len);
-
 	if (net_context_get_type(ctx) == SOCK_STREAM) {
+		/* TCP: we don't care about packet header, get rid of it asap.
+		 * UDP: keep packet header to support recvfrom().
+		 */
+		header_len = net_pkt_appdata(pkt) - pkt->frags->data;
+		net_buf_pull(pkt->frags, header_len);
 		net_context_update_recv_wnd(ctx, -net_pkt_appdatalen(pkt));
 	}
 
@@ -209,23 +210,16 @@ int zsock_accept(int sock, struct sockaddr *addr, socklen_t *addrlen)
 	return POINTER_TO_INT(ctx);
 }
 
-ssize_t zsock_send(int sock, const void *buf, size_t len, int flags)
+static struct net_pkt* get_tx_pkt(struct net_context *ctx,
+				  const void *buf, size_t len,
+				  s32_t timeout)
 {
-	ARG_UNUSED(flags);
-	int err;
-	struct net_pkt *send_pkt;
-	s32_t timeout = K_FOREVER;
-	struct net_context *ctx = INT_TO_POINTER(sock);
+	struct net_pkt *pkt = NULL;
 	size_t max_len = net_if_get_mtu(net_context_get_iface(ctx));
 
-	if (sock_is_nonblock(ctx)) {
-		timeout = K_NO_WAIT;
-	}
-
-	send_pkt = net_pkt_get_tx(ctx, timeout);
-	if (!send_pkt) {
-		errno = EAGAIN;
-		return -1;
+	pkt = net_pkt_get_tx(ctx, timeout);
+	if (!pkt) {
+		return NULL;
 	}
 
 	/* Make sure we don't send more data in one packet than
@@ -240,9 +234,29 @@ ssize_t zsock_send(int sock, const void *buf, size_t len, int flags)
 		len = max_len;
 	}
 
-	len = net_pkt_append(send_pkt, len, buf, timeout);
+	len = net_pkt_append(pkt, len, buf, timeout);
 	if (!len) {
-		net_pkt_unref(send_pkt);
+		net_pkt_unref(pkt);
+		return NULL;
+	}
+
+	return pkt;
+}
+
+ssize_t zsock_send(int sock, const void *buf, size_t len, int flags)
+{
+	ARG_UNUSED(flags);
+	int err;
+	struct net_pkt *send_pkt;
+	s32_t timeout = K_FOREVER;
+	struct net_context *ctx = INT_TO_POINTER(sock);
+
+	if (sock_is_nonblock(ctx)) {
+		timeout = K_NO_WAIT;
+	}
+
+	send_pkt = get_tx_pkt(ctx, buf, len, timeout);
+	if (!send_pkt) {
 		errno = EAGAIN;
 		return -1;
 	}
@@ -257,7 +271,41 @@ ssize_t zsock_send(int sock, const void *buf, size_t len, int flags)
 	return len;
 }
 
-static inline ssize_t zsock_recv_stream(struct net_context *ctx, void *buf, size_t max_len)
+ssize_t zsock_sendto(int sock, const void *buf, size_t len, int flags,
+		     const struct sockaddr *dest_addr, socklen_t addrlen)
+{
+	ARG_UNUSED(flags);
+	int err;
+	struct net_pkt *send_pkt;
+	s32_t timeout = K_FOREVER;
+	struct net_context *ctx = INT_TO_POINTER(sock);
+
+	if (sock_is_nonblock(ctx)) {
+		timeout = K_NO_WAIT;
+	}
+
+	send_pkt = get_tx_pkt(ctx, buf, len, timeout);
+	if (!send_pkt) {
+		errno = EAGAIN;
+		return -1;
+	}
+
+	SET_ERRNO(net_context_recv(ctx, zsock_received_cb, K_NO_WAIT, NULL));
+
+	err = net_context_sendto(send_pkt, dest_addr, addrlen, NULL, timeout,
+				 NULL, NULL);
+	if (err < 0) {
+		net_pkt_unref(send_pkt);
+		errno = -err;
+		return -1;
+	}
+
+	return len;
+}
+
+static inline ssize_t zsock_recv_stream(struct net_context *ctx,
+					void *buf,
+					size_t max_len)
 {
 	size_t recv_len = 0;
 	s32_t timeout = K_FOREVER;
@@ -326,10 +374,17 @@ static inline ssize_t zsock_recv_stream(struct net_context *ctx, void *buf, size
 
 ssize_t zsock_recv(int sock, void *buf, size_t max_len, int flags)
 {
+	return zsock_recvfrom(sock, buf, max_len, flags, NULL, NULL);
+}
+
+ssize_t zsock_recvfrom(int sock, void *buf, size_t max_len, int flags,
+		       struct sockaddr *src_addr, socklen_t *addrlen)
+{
 	ARG_UNUSED(flags);
 	struct net_context *ctx = INT_TO_POINTER(sock);
 	enum net_sock_type sock_type = net_context_get_type(ctx);
 	size_t recv_len = 0;
+	unsigned int header_len;
 
 	if (sock_type == SOCK_DGRAM) {
 
@@ -345,6 +400,19 @@ ssize_t zsock_recv(int sock, void *buf, size_t max_len, int flags)
 			errno = EAGAIN;
 			return -1;
 		}
+
+		if (src_addr && addrlen) {
+			int rv;
+
+			rv = net_pkt_get_src_addr(pkt, src_addr, addrlen);
+			if (rv < 0) {
+				errno = rv;
+				return -1;
+			}
+		}
+		/* Remove packet header since we've handled src addr and port */
+		header_len = net_pkt_appdata(pkt) - pkt->frags->data;
+		net_buf_pull(pkt->frags, header_len);
 
 		recv_len = net_pkt_appdatalen(pkt);
 		if (recv_len > max_len) {
