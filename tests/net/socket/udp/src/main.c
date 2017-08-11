@@ -15,6 +15,206 @@
 
 #define TEST_STR_SMALL "test"
 
+#define HELLO_MESSAGE "UDP Hello"
+
+#define LOCAL_PORT 9898
+#define REMOTE_PORT 4242
+
+#define V4_ANY_ADDR "0.0.0.0"
+#define V6_ANY_ADDR "0:0:0:0:0:0:0:0"
+
+#define V4_LOCAL_ADDR "192.0.2.1"
+#define V6_LOCAL_ADDR "2001:db8::1"
+
+#define V4_REMOTE_ADDR "192.0.2.2"
+#define V6_REMOTE_ADDR "2001:db8::2"
+
+static void test_v4_sendto_recvfrom(void)
+{
+	int rv;
+	int sock;
+	ssize_t sent = 0;
+	ssize_t recved = 0;
+	char rx_buf[30] = {0};
+	struct sockaddr_in addr;
+	socklen_t socklen;
+
+	sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+	zassert_true(sock >= 0, "socket open failed");
+
+	addr.sin_family = AF_INET;
+	addr.sin_port = htons(REMOTE_PORT);
+	rv = inet_pton(AF_INET, V4_REMOTE_ADDR, &(addr.sin_addr));
+	zassert_equal(rv, 1, "inet_pton failed");
+
+	sent = sendto(sock,
+		      TEST_STR_SMALL,
+		      strlen(TEST_STR_SMALL),
+		      0,
+		      (struct sockaddr *)&addr,
+		      sizeof(addr));
+	zassert_equal(sent, strlen(TEST_STR_SMALL), "sendto failed");
+
+	socklen = sizeof(addr);
+	recved = recvfrom(sock,
+			  rx_buf,
+			  sizeof(rx_buf),
+			  0,
+			  (struct sockaddr *)&addr,
+			  &socklen);
+	zassert_true(recved > 0, "recvfrom fail");
+	zassert_equal(recved,
+		      strlen(TEST_STR_SMALL),
+		      "unexpected received bytes");
+	zassert_equal(strncmp(rx_buf, TEST_STR_SMALL, strlen(TEST_STR_SMALL)),
+		      0,
+		      "unexpected data");
+}
+
+static void test_v6_sendto_recvfrom(void)
+{
+	int rv;
+	int sock;
+	ssize_t sent = 0;
+	ssize_t recved = 0;
+	char rx_buf[30] = {0};
+	struct sockaddr_in6 addr;
+	socklen_t socklen;
+
+	sock = socket(AF_INET6, SOCK_DGRAM, IPPROTO_UDP);
+	zassert_true(sock >= 0, "socket open failed");
+
+	addr.sin6_family = AF_INET6;
+	addr.sin6_port = htons(REMOTE_PORT);
+	rv = inet_pton(AF_INET6, V6_REMOTE_ADDR, &(addr.sin6_addr));
+	zassert_equal(rv, 1, "inet_pton failed");
+
+	sent = sendto(sock,
+		      TEST_STR_SMALL,
+		      strlen(TEST_STR_SMALL),
+		      0,
+		      (struct sockaddr *)&addr,
+		      sizeof(addr));
+	zassert_equal(sent, strlen(TEST_STR_SMALL), "sendto failed");
+
+	socklen = sizeof(addr);
+	recved = recvfrom(sock,
+			  rx_buf,
+			  sizeof(rx_buf),
+			  0,
+			  (struct sockaddr *)&addr,
+			  &socklen);
+	zassert_true(recved > 0, "recvfrom fail");
+	zassert_equal(recved,
+		      strlen(TEST_STR_SMALL),
+		      "unexpected received bytes");
+	zassert_equal(strncmp(rx_buf, TEST_STR_SMALL, strlen(TEST_STR_SMALL)),
+		      0,
+		      "unexpected data");
+}
+
+static void test_v4_bind_sendto(void)
+{
+	int rv;
+	int sock;
+	ssize_t sent = 0;
+	ssize_t recved = 0;
+	char rx_buf[30] = {0};
+	struct sockaddr_in remote_addr;
+	struct sockaddr_in local_addr;
+	socklen_t socklen;
+
+	sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+	zassert_true(sock >= 0, "socket open failed");
+
+	local_addr.sin_family = AF_INET;
+	local_addr.sin_port = htons(LOCAL_PORT);
+	rv = inet_pton(AF_INET, V4_ANY_ADDR, &(local_addr.sin_addr));
+	zassert_equal(rv, 1, "inet_pton failed");
+
+	rv = bind(sock, (struct sockaddr *)&local_addr, sizeof(local_addr));
+	zassert_equal(rv, 0, "bind failed");
+
+	remote_addr.sin_family = AF_INET;
+	remote_addr.sin_port = htons(REMOTE_PORT);
+	rv = inet_pton(AF_INET, V4_REMOTE_ADDR, &(remote_addr.sin_addr));
+	zassert_equal(rv, 1, "inet_pton failed");
+
+	sent = sendto(sock,
+		      TEST_STR_SMALL,
+		      strlen(TEST_STR_SMALL),
+		      0,
+		      (struct sockaddr *)&remote_addr,
+		      sizeof(remote_addr));
+	zassert_equal(sent, strlen(TEST_STR_SMALL), "sendto failed");
+
+	socklen = sizeof(remote_addr);
+	recved = recvfrom(sock,
+			  rx_buf,
+			  sizeof(rx_buf),
+			  0,
+			  (struct sockaddr *)&remote_addr,
+			  &socklen);
+	zassert_true(recved > 0, "recvfrom fail");
+	zassert_equal(recved,
+		      strlen(TEST_STR_SMALL),
+		      "unexpected received bytes");
+	zassert_equal(strncmp(rx_buf, TEST_STR_SMALL, strlen(TEST_STR_SMALL)),
+		      0,
+		      "unexpected data");
+}
+
+static void test_v6_bind_sendto(void)
+{
+	int rv;
+	int sock;
+	ssize_t sent = 0;
+	ssize_t recved = 0;
+	char rx_buf[30] = {0};
+	struct sockaddr_in6 remote_addr;
+	struct sockaddr_in6 local_addr;
+	socklen_t socklen;
+
+	sock = socket(AF_INET6, SOCK_DGRAM, IPPROTO_UDP);
+	zassert_true(sock >= 0, "socket open failed");
+
+	local_addr.sin6_family = AF_INET6;
+	local_addr.sin6_port = htons(LOCAL_PORT);
+	rv = inet_pton(AF_INET6, V6_LOCAL_ADDR, &(local_addr.sin6_addr));
+	zassert_equal(rv, 1, "inet_pton failed");
+
+	rv = bind(sock, (struct sockaddr *)&local_addr, sizeof(local_addr));
+	zassert_equal(rv, 0, "bind failed");
+
+	remote_addr.sin6_family = AF_INET6;
+	remote_addr.sin6_port = htons(REMOTE_PORT);
+	rv = inet_pton(AF_INET6, V6_REMOTE_ADDR, &(remote_addr.sin6_addr));
+	zassert_equal(rv, 1, "inet_pton failed");
+
+	sent = sendto(sock,
+		      TEST_STR_SMALL,
+		      strlen(TEST_STR_SMALL),
+		      0,
+		      (struct sockaddr *)&remote_addr,
+		      sizeof(remote_addr));
+	zassert_equal(sent, strlen(TEST_STR_SMALL), "sendto failed");
+
+	socklen = sizeof(remote_addr);
+	recved = recvfrom(sock,
+			  rx_buf,
+			  sizeof(rx_buf),
+			  0,
+			  (struct sockaddr *)&remote_addr,
+			  &socklen);
+	zassert_true(recved > 0, "recvfrom fail");
+	zassert_equal(recved,
+		      strlen(TEST_STR_SMALL),
+		      "unexpected received bytes");
+	zassert_equal(strncmp(rx_buf, TEST_STR_SMALL, strlen(TEST_STR_SMALL)),
+		      0,
+		      "unexpected data");
+}
+
 void test_send_recv_2_sock(void)
 {
 	int sock1, sock2;
@@ -43,17 +243,46 @@ void test_send_recv_2_sock(void)
 	zassert_equal(cmp, 0, "Invalid recv data");
 }
 
+static void network_setup()
+{
+	struct in_addr v4_local;
+	struct in6_addr v6_local;
+	struct net_if_addr *addr = NULL;
+	int rv = 0;
+
+	zassert_not_null(net_if_get_default(), "No default netif");
+
+	/* ipv4 */
+	rv = inet_pton(AF_INET, V4_LOCAL_ADDR, &v4_local);
+	zassert_equal(rv, 1, "inet_pton failed");
+
+	addr = net_if_ipv4_addr_add(net_if_get_default(),
+			&v4_local,
+			NET_ADDR_MANUAL,
+			0);
+	zassert_not_null(addr, "net_if_ipv4_addr_add failed");
+
+	/* ipv6 */
+	rv = inet_pton(AF_INET6, V6_LOCAL_ADDR, &v6_local);
+	zassert_equal(rv, 1, "inet_pton failed");
+
+	addr = net_if_ipv6_addr_add(net_if_get_default(),
+			&v6_local,
+			NET_ADDR_MANUAL,
+			0);
+	zassert_not_null(addr, "net_if_ipv6_addr_add failed");
+}
+
 void test_main(void)
 {
-	zassert_not_null(net_if_get_default(), "No default netif");
-	static struct in_addr in4addr_my = { { {192, 0, 2, 1} } };
-
-	net_if_ipv4_addr_add(net_if_get_default(), &in4addr_my,
-			     NET_ADDR_MANUAL, 0);
+	network_setup();
 
 	ztest_test_suite(socket_udp,
-		ztest_unit_test(test_send_recv_2_sock)
-	);
+			ztest_unit_test(test_send_recv_2_sock),
+			ztest_unit_test(test_v4_sendto_recvfrom),
+			ztest_unit_test(test_v6_sendto_recvfrom),
+			ztest_unit_test(test_v4_bind_sendto),
+			ztest_unit_test(test_v6_bind_sendto));
 
 	ztest_run_test_suite(socket_udp);
 }
