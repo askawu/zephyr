@@ -2072,6 +2072,11 @@ static int sendto(struct net_pkt *pkt,
 		return -EBADF;
 	}
 
+	ret = bind_default(context);
+	if (ret) {
+		return ret;
+	}
+
 #if defined(CONFIG_NET_TCP)
 	if (net_context_get_ip_proto(context) == IPPROTO_TCP) {
 		if (net_context_get_state(context) != NET_CONTEXT_CONNECTED) {
@@ -2324,31 +2329,28 @@ static int recv_udp(struct net_context *context,
 		context->conn_handler = NULL;
 	}
 
+	ret = bind_default(context);
+	if (ret) {
+		return ret;
+	}
+
 #if defined(CONFIG_NET_IPV6)
 	if (net_context_get_family(context) == AF_INET6) {
-		if (net_sin6_ptr(&context->local)->sin6_addr) {
-			net_ipaddr_copy(&net_sin6(&local_addr)->sin6_addr,
+		net_ipaddr_copy(&net_sin6(&local_addr)->sin6_addr,
 				     net_sin6_ptr(&context->local)->sin6_addr);
-
-			laddr = &local_addr;
-		}
-
-		net_sin6(&local_addr)->sin6_port =
-			net_sin6((struct sockaddr *)&context->local)->sin6_port;
+		laddr = &local_addr;
 		lport = net_sin6((struct sockaddr *)&context->local)->sin6_port;
+		net_sin6(&local_addr)->sin6_port = lport;
 	}
 #endif /* CONFIG_NET_IPV6 */
 
 #if defined(CONFIG_NET_IPV4)
 	if (net_context_get_family(context) == AF_INET) {
-		if (net_sin_ptr(&context->local)->sin_addr) {
-			net_ipaddr_copy(&net_sin(&local_addr)->sin_addr,
-				      net_sin_ptr(&context->local)->sin_addr);
-
-			laddr = &local_addr;
-		}
-
+		net_ipaddr_copy(&net_sin(&local_addr)->sin_addr,
+				net_sin_ptr(&context->local)->sin_addr);
+		laddr = &local_addr;
 		lport = net_sin((struct sockaddr *)&context->local)->sin_port;
+		net_sin(&local_addr)->sin_port = lport;
 	}
 #endif /* CONFIG_NET_IPV4 */
 
