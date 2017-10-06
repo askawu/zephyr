@@ -29,7 +29,7 @@
 #include <kernel_structs.h>
 
 /* running total of timer count */
-static volatile u32_t clock_accumulated_count;
+static volatile u64_t clock_accumulated_count;
 
 /*
  * A board support package's board.h header must provide definitions for the
@@ -733,7 +733,7 @@ int _sys_clock_driver_init(struct device *device)
 
 /**
  *
- * @brief Read the platform's timer hardware
+ * @brief Read the platform's timer hardware (32-bit version)
  *
  * This routine returns the current time in terms of timer hardware clock
  * cycles.
@@ -749,7 +749,38 @@ u32_t _timer_cycle_get_32(void)
 #ifdef CONFIG_TICKLESS_KERNEL
 return (u32_t) get_elapsed_count();
 #else
-	u32_t cac, count;
+	u64_t cac;
+	u32_t count;
+
+	do {
+		cac = clock_accumulated_count;
+		count = SysTick->LOAD - SysTick->VAL;
+	} while (cac != clock_accumulated_count);
+
+	return (u32_t)(cac + count);
+#endif
+}
+
+/**
+ *
+ * @brief Read the platform's timer hardware
+ *
+ * This routine returns the current time in terms of timer hardware clock
+ * cycles.
+ *
+ * @return up counter of elapsed clock cycles
+ *
+ * \INTERNAL WARNING
+ * systick counter is a 24-bit down counter which is reset to "reload" value
+ * once it reaches 0.
+ */
+u64_t _timer_cycle_get(void)
+{
+#ifdef CONFIG_TICKLESS_KERNEL
+return get_elapsed_count();
+#else
+	u64_t cac;
+	u32_t count;
 
 	do {
 		cac = clock_accumulated_count;
