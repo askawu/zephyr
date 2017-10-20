@@ -36,6 +36,8 @@
 #include <net/net_pkt.h>
 
 #include "net_private.h"
+#include "tcp.h"
+#include "udp.h"
 
 /* Available (free) buffers queue */
 #define NET_PKT_RX_COUNT	CONFIG_NET_PKT_RX_COUNT
@@ -1686,9 +1688,21 @@ int net_pkt_get_src_addr(struct net_pkt *pkt, struct sockaddr *addr,
 		proto = NET_IPV6_HDR(pkt)->nexthdr;
 
 		if (IS_ENABLED(CONFIG_NET_TCP) && proto == IPPROTO_TCP) {
-			addr6->sin6_port = net_pkt_tcp_data(pkt)->src_port;
+			struct net_tcp_hdr hdr;
+
+			if (!net_tcp_get_hdr(pkt, &hdr)) {
+				return -EINVAL;
+			}
+
+			addr6->sin6_port = hdr.src_port;
 		} else if (IS_ENABLED(CONFIG_NET_UDP) && proto == IPPROTO_UDP) {
-			addr6->sin6_port = net_pkt_udp_data(pkt)->src_port;
+			struct net_udp_hdr hdr;
+
+			if (!net_udp_get_hdr(pkt, &hdr)) {
+				return -EINVAL;
+			}
+
+			addr6->sin6_port = hdr.src_port;
 		} else {
 			return -ENOTSUP;
 		}
@@ -1704,9 +1718,21 @@ int net_pkt_get_src_addr(struct net_pkt *pkt, struct sockaddr *addr,
 		proto = NET_IPV4_HDR(pkt)->proto;
 
 		if (IS_ENABLED(CONFIG_NET_TCP) && proto == IPPROTO_TCP) {
-			addr4->sin_port = net_pkt_tcp_data(pkt)->src_port;
+			struct net_tcp_hdr hdr;
+
+			if (!net_tcp_get_hdr(pkt, &hdr)) {
+				return -EINVAL;
+			}
+
+			addr4->sin_port = hdr.src_port;
 		} else if (IS_ENABLED(CONFIG_NET_UDP) && proto == IPPROTO_UDP) {
-			addr4->sin_port = net_pkt_udp_data(pkt)->src_port;
+			struct net_udp_hdr hdr;
+
+			if (!net_udp_get_hdr(pkt, &hdr)) {
+				return -EINVAL;
+			}
+
+			addr4->sin_port = hdr.src_port;
 		} else {
 			return -ENOTSUP;
 		}
