@@ -95,7 +95,7 @@ static inline u16_t net_udp_get_chksum(struct net_pkt *pkt,
 }
 
 static inline struct net_udp_hdr *net_udp_get_hdr(struct net_pkt *pkt,
-						  struct net_udp_udp *hdr)
+						  struct net_udp_hdr *hdr)
 {
 	struct net_buf *frag = pkt->frags;
 	u16_t pos;
