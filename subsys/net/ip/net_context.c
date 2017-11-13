@@ -1082,6 +1082,183 @@ static int tcp_hdr_len(struct net_pkt *pkt)
 	return 0;
 }
 
+NET_CONN_CB(tcp_established)
+{
+	struct net_context *context = (struct net_context *)user_data;
+	struct net_tcp_hdr hdr, *tcp_hdr;
+	enum net_verdict ret;
+	u8_t tcp_flags;
+	u16_t data_len;
+
+	NET_ASSERT(context && context->tcp);
+
+	if (net_tcp_get_state(context->tcp) < NET_TCP_ESTABLISHED) {
+		NET_ERR("Context %p in wrong state %d",
+			context, net_tcp_get_state(context->tcp));
+		return NET_DROP;
+	}
+
+	tcp_hdr = net_tcp_get_hdr(pkt, &hdr);
+	if (!tcp_hdr) {
+		return NET_DROP;
+	}
+
+	tcp_flags = NET_TCP_FLAGS(tcp_hdr);
+
+	net_tcp_print_recv_info("DATA", pkt, tcp_hdr->src_port);
+
+	if (net_tcp_seq_cmp(sys_get_be32(tcp_hdr->seq),
+			    context->tcp->send_ack) < 0) {
+		/* Peer sent us packet we've already seen. Apparently,
+		 * our ack was lost.
+		 */
+
+		/* RFC793 specifies that "highest" (i.e. current from our PoV)
+		 * ack # value can/should be sent, so we just force resend.
+		 */
+		send_ack(context, &conn->remote_addr, true);
+		return NET_DROP;
+	}
+
+	if (sys_get_be32(tcp_hdr->seq) - context->tcp->send_ack) {
+		/* Don't try to reorder packets.  If it doesn't
+		 * match the next segment exactly, drop and wait for
+		 * retransmit
+		 */
+		return NET_DROP;
+	}
+
+	/* state transition */
+
+	/*
+	 * If we receive RST here, we close the socket. See RFC 793 chapter
+	 * called "Reset Processing" for details.
+	 */
+	if (tcp_flags & NET_TCP_RST) {
+		/* We only accept RST packet that has valid seq field. */
+		if (!net_tcp_validate_seq(context->tcp, pkt)) {
+			net_stats_update_tcp_seg_rsterr();
+			return NET_DROP;
+		}
+
+		net_stats_update_tcp_seg_rst();
+
+		net_tcp_print_recv_info("RST", pkt, tcp_hdr->src_port);
+
+		if (context->recv_cb) {
+			context->recv_cb(context, NULL, -ECONNRESET,
+					 context->tcp->recv_user_data);
+		}
+
+		net_context_unref(context);
+
+		return NET_DROP;
+	}
+
+	if (tcp_flags & NET_TCP_ACK) {
+		if (net_tcp_get_state(context->tcp) == NET_TCP_ESTABLISHED) {
+			/* Maintain sent pkt list */
+			net_tcp_ack_received(context,
+					     sys_get_be32(tcp_hdr->ack));
+		} else if (net_tcp_get_state(context->tcp)
+			   == NET_TCP_FIN_WAIT_1) {
+			/* Step to FIN_WAIT_2 (active close) */
+			net_tcp_change_state(context->tcp, NET_TCP_FIN_WAIT_2);
+		} else if (net_tcp_get_state(context->tcp)
+			   == NET_TCP_LAST_ACK) {
+			/* Step to CLOSED (passive close)*/
+			net_tcp_change_state(context->tcp, NET_TCP_CLOSED);
+		} else {
+			return NET_DROP;
+		}
+	}
+
+	if (tcp_flags & NET_TCP_FIN) {
+		if (net_tcp_get_state(context->tcp) == NET_TCP_ESTABLISHED) {
+			/* Step to CLOSE_WAIT (passive close) */
+			net_tcp_change_state(context->tcp, NET_TCP_CLOSE_WAIT);
+
+			/* We should receive ACK next in order to get rid of
+			 * LAST_ACK state that we are entering in a short while.
+			 * But we need to be prepared to NOT to receive it as
+			 * otherwise the connection would be stuck forever.
+			 */
+			k_delayed_work_submit(&context->tcp->ack_timer, ACK_TIMEOUT);
+		} else if (net_tcp_get_state(context->tcp)
+			   == NET_TCP_FIN_WAIT_2) {
+			/* Step to TIME_WAIT (active close) */
+			net_tcp_change_state(context->tcp, NET_TCP_TIME_WAIT);
+		} else {
+			return NET_DROP;
+		}
+
+		context->tcp->fin_rcvd = 1;
+	}
+
+	/* state handling */
+
+	if (net_tcp_get_state(context->tcp) == NET_TCP_CLOSED) {
+		goto conn_closed;
+	}
+
+	if (net_tcp_seq_cmp(sys_get_be32(tcp_hdr->seq),
+			    context->tcp->send_ack) < 0) {
+		/* Peer sent us packet we've already seen. Apparently,
+		 * our ack was lost.
+		 */
+
+		/* RFC793 specifies that "highest" (i.e. current from our PoV)
+		 * ack # value can/should be sent, so we just force resend.
+		 */
+		send_ack(context, &conn->remote_addr, true);
+		return NET_DROP;
+	}
+
+	if (sys_get_be32(tcp_hdr->seq) - context->tcp->send_ack) {
+		/* Don't try to reorder packets.  If it doesn't
+		 * match the next segment exactly, drop and wait for
+		 * retransmit
+		 */
+		return NET_DROP;
+	}
+
+	set_appdata_values(pkt, IPPROTO_TCP);
+
+	data_len = net_pkt_appdatalen(pkt);
+	if (data_len > net_tcp_get_recv_wnd(context->tcp)) {
+		NET_ERR("Context %p: overflow of recv window (%d vs %d), pkt dropped",
+			context, net_tcp_get_recv_wnd(context->tcp), data_len);
+		return NET_DROP;
+	}
+
+	ret = packet_received(conn, pkt, context->tcp->recv_user_data);
+
+	context->tcp->send_ack += data_len;
+	if (tcp_flags & NET_TCP_FIN) {
+		context->tcp->send_ack += 1;
+	}
+
+	send_ack(context, &conn->remote_addr, false);
+
+	if (net_tcp_get_state(context->tcp) == NET_TCP_TIME_WAIT) {
+		net_tcp_change_state(context->tcp, NET_TCP_CLOSED);
+		goto conn_closed;
+	}
+
+	return ret;
+
+conn_closed:
+	if (context->recv_cb) {
+		context->recv_cb(context, NULL, 0,
+				context->tcp->recv_user_data);
+	}
+
+	net_context_unref(context);
+
+	return NET_OK;
+}
+
+#if 0
 /* This is called when we receive data after the connection has been
  * established. The core TCP logic is located here.
  */
@@ -1112,6 +1289,23 @@ NET_CONN_CB(tcp_established)
 	if (tcp_flags & NET_TCP_ACK) {
 		net_tcp_ack_received(context,
 				     sys_get_be32(tcp_hdr->ack));
+
+		if (net_tcp_get_state(context->tcp) == NET_TCP_FIN_WAIT_1) {
+			net_tcp_change_state(context->tcp, NET_TCP_FIN_WAIT_2);
+		} else if (net_tcp_get_state(context->tcp) == NET_TCP_LAST_ACK) {
+			/* ACK is received in LAST_ACK, it's passive close.
+			 * Step to CLOSED and notify the callback about the
+			 * connection is closed.
+			 */
+			net_tcp_change_state(context->tcp, NET_TCP_CLOSED);
+			if (context->recv_cb) {
+				context->recv_cb(context, NULL, 0,
+						context->tcp->recv_user_data);
+			}
+
+			net_context_unref(context);
+			return NET_OK;
+		}
 	}
 
 	/*
@@ -1174,40 +1368,44 @@ NET_CONN_CB(tcp_established)
 	context->tcp->send_ack += data_len;
 
 	if (tcp_flags & NET_TCP_FIN) {
-		/* Sending an ACK in the CLOSE_WAIT state will transition to
-		 * LAST_ACK state
-		 */
 		context->tcp->fin_rcvd = 1;
 
 		if (net_tcp_get_state(context->tcp) == NET_TCP_ESTABLISHED) {
+			/* FIN is received in ESTABLISHED, it's passive close.
+			 * Step to CLOSE_WAIT, send the ack, and wait for the
+			 * last ack.
+			 */
 			net_tcp_change_state(context->tcp, NET_TCP_CLOSE_WAIT);
+
+			/* We should receive ACK next in order to get rid of
+			 * LAST_ACK state that we are entering in a short while.
+			 * But we need to be prepared to NOT to receive it as
+			 * otherwise the connection would be stuck forever.
+			 */
+			k_delayed_work_submit(&context->tcp->ack_timer, ACK_TIMEOUT);
+		} else if (net_tcp_get_state(context->tcp) == NET_TCP_FIN_WAIT_2) {
+			/* FIN is received in FIN_WAIT_2, it's active close.
+			 * Step into CLOSED after sending the last ack. Notify
+			 * the callback about the connection is closed..
+			 */
+			if (context->recv_cb) {
+				context->recv_cb(context, NULL, 0,
+						context->tcp->recv_user_data);
+			}
+		} else {
+			/* Drop the unexpected packet. */
+			printk("DROP: %d\n", net_tcp_get_state(context->tcp));
+			return NET_DROP;
 		}
 
 		context->tcp->send_ack += 1;
-
-		if (context->recv_cb) {
-			context->recv_cb(context, NULL, 0,
-					 context->tcp->recv_user_data);
-		}
-
-		/* We should receive ACK next in order to get rid of LAST_ACK
-		 * state that we are entering in a short while. But we need to
-		 * be prepared to NOT to receive it as otherwise the connection
-		 * would be stuck forever.
-		 */
-		k_delayed_work_submit(&context->tcp->ack_timer, ACK_TIMEOUT);
 	}
 
 	send_ack(context, &conn->remote_addr, false);
 
-	if (sys_slist_is_empty(&context->tcp->sent_list)
-	    && context->tcp->fin_rcvd
-	    && context->tcp->fin_sent) {
-		net_context_unref(context);
-	}
-
 	return ret;
 }
+#endif
 
 
 NET_CONN_CB(tcp_synack_received)

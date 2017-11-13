@@ -903,6 +903,8 @@ void net_tcp_ack_received(struct net_context *ctx, u32_t ack)
 		net_stats_update_tcp_seg_ackerr();
 	}
 
+	printk("sent list empty: %d\n", sys_slist_is_empty(list));
+
 	while (!sys_slist_is_empty(list)) {
 		struct net_tcp_hdr hdr, *tcp_hdr;
 
@@ -925,16 +927,6 @@ void net_tcp_ack_received(struct net_context *ctx, u32_t ack)
 		if (!net_tcp_seq_greater(ack, seq)) {
 			net_stats_update_tcp_seg_ackerr();
 			break;
-		}
-
-		if (tcp_hdr->flags & NET_TCP_FIN) {
-			enum net_tcp_state s = net_tcp_get_state(tcp);
-
-			if (s == NET_TCP_FIN_WAIT_1) {
-				net_tcp_change_state(tcp, NET_TCP_FIN_WAIT_2);
-			} else if (s == NET_TCP_CLOSING) {
-				net_tcp_change_state(tcp, NET_TCP_TIME_WAIT);
-			}
 		}
 
 		sys_slist_remove(list, NULL, head);
