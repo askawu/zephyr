@@ -1,0 +1,34 @@
+
+menu "Firmata Support"
+
+config FIRMATA
+	bool
+	prompt "firmata support"
+	default n
+	help
+	  Firmata is a protocol for communicating with microcontrollers from
+	  software on a computer.
+
+if FIRMATA
+
+config FIRMATA_INPUT_BUF_SIZE
+	int "firmata input buffer size"
+	default 16
+	help
+	  The memory used to buffer the command and data from the host.
+	  The default value is optimized to save RAM. You may need to
+	  increase the buffer size for some situations, e.g., the host
+	  sends a long string data or an extended analog message.
+
+config FIRMATA_OUTPUT_BUF_SIZE
+	int "firmata output buffer size"
+	default 16
+	help
+	  The memory used to buffer the outgoing message. The default value
+	  is optimized to save RAM. To reduce the overhead of the transmission,
+	  you may need to increase the buffer size and take advantage of smaller
+	  number of transmissions. Note that the minimum value is 2.
+
+endif
+
+endmenu
